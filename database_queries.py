@@ -37,7 +37,7 @@ def fetch_all_gis_data():
             "SELECT * FROM building WHERE nature LIKE '%%Industrial%%'", 
             engine, geom_col="geom"
         )
-        
+        print("✅ Thành công! Đã lấy dữ liệu từ PostgreSQL lên web server")
         return bounds, road, garbage, building_res, building_ind
         
     except Exception as e:

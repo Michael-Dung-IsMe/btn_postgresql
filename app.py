@@ -1,9 +1,9 @@
 import streamlit as st
 import matplotlib.pyplot as plt
 import pandas as pd
+import matplotlib.patches as mpatches
 from streamlit_option_menu import option_menu
 
-# Import hàm kéo dữ liệu từ file database_queries.py vừa tạo
 from database_queries import fetch_all_gis_data
 
 # ===============================
@@ -11,9 +11,6 @@ from database_queries import fetch_all_gis_data
 # ===============================
 st.set_page_config(page_title="Hệ thống Quản lý Rác thải GIS", layout="wide")
 
-# ===============================
-# 2. ĐỊNH DẠNG GIAO DIỆN (DARK MODE)
-# ===============================
 st.markdown("""
 <style>
 .stApp {background-color:#0e1117;}
@@ -21,34 +18,45 @@ st.markdown("""
     background:#161b22;
     padding:15px;
     border-radius:10px;
-    border-left:4px solid #00d1b2;
+    border-left:4px solid #00ea75;
 }
 </style>
 """, unsafe_allow_html=True)
 
 # ===============================
-# 3. TẢI DỮ LIỆU TỪ DATABASE (Đã được chuẩn hóa)
+# 2. TẢI VÀ XỬ LÝ DỮ LIỆU
 # ===============================
 @st.cache_data
 def load_data():
-    """
-    Sử dụng cơ chế cache của Streamlit để lưu tạm dữ liệu. 
-    Chỉ vào database lấy đúng 1 lần khi người dùng mới mở web.
-    """
     bounds, road, garbage, building_res, building_ind = fetch_all_gis_data()
-    
-    if bounds is None:
-        st.error("❌ Không thể lấy dữ liệu từ cơ sở dữ liệu. Vui lòng kiểm tra lại file .env")
-        
     return bounds, road, garbage, building_res, building_ind
 
-bounds, road, garbage, building_res, building_ind = load_data()
+
+@st.cache_data
+def calculate_distances(_building_res, _garbage):
+    # Tính khoảng cách
+    distances = _building_res.geometry.apply(lambda x: _garbage.distance(x).min())
+    _building_res['min_dist'] = distances
+    
+    # Hàm gán màu theo khoảng cách
+    def assign_color(dist):
+        if dist <= 50: return '#00ea75'    # Xanh lá (Rất gần)
+        elif dist <= 150: return '#ffc107' # Vàng (Trung bình)
+        else: return '#ff3860'             # Đỏ (Xa)
+        
+    _building_res['dist_color'] = _building_res['min_dist'].apply(assign_color)
+    return _building_res
+
+bounds, road, garbage, building_res_raw, building_ind = load_data()
 
 if bounds is None:
-    st.stop() # Dừng chạy web nếu không có dữ liệu
+    st.error("❌ Không thể kết nối cơ sở dữ liệu.")
+    st.stop()
+
+building_res = calculate_distances(building_res_raw, garbage)
 
 # ===============================
-# 4. MENU CHÍNH (PHÍA TRÊN)
+# 3. MENU CHÍNH
 # ===============================
 selected = option_menu(
     menu_title=None,
@@ -57,12 +65,12 @@ selected = option_menu(
     orientation="horizontal",
     styles={
         "container": {"background-color": "#161b22"},
-        "nav-link-selected": {"background-color": "#00d1b2", "color": "#0e1117"},
+        "nav-link-selected": {"background-color": "#00ea75", "color": "#0e1117"},
     },
 )
 
 # ===============================
-# TRANG 1: BẢN ĐỒ
+# TRANG 1: BẢN ĐỒ LAYER CONTROL
 # ===============================
 if selected == "📍 Bản đồ & Điều khiển":
 
@@ -71,137 +79,119 @@ if selected == "📍 Bản đồ & Điều khiển":
     with col_ctrl:
         st.subheader("⚙️ Bảng Điều Khiển")
 
-        mode = st.radio(
-            "Chế độ hiển thị",
-            [
-                "Tất cả dữ liệu",
-                "Nhấn mạnh Khu dân cư",
-                "Nhấn mạnh Khu công nghiệp",
-                "Chỉ hiển thị Điểm rác"
-            ]
+        danh_sach_lop = ["Khu dân cư (Theo khoảng cách)", "Khu công nghiệp", "Điểm thu gom rác", "Hệ thống đường xá"]
+        
+        lop_hien_thi = st.multiselect(
+            "Chọn các lớp dữ liệu muốn hiển thị:",
+            options=danh_sach_lop,
+            default=["Khu dân cư (Theo khoảng cách)", "Điểm thu gom rác", "Hệ thống đường xá"]
         )
 
-        buffer_size = st.slider(
-            "Vùng đệm rác (mét)",
-            0, 500, 0
-        )
-
-        st.info("💡 Mẹo: Kéo thanh trượt để xem phạm vi phục vụ của các điểm thu gom rác.")
+        buffer_size = st.slider("Vùng đệm rác (mét)", 0, 500, 0)
+        
+        # Chú giải bản đồ
+        st.markdown("---")
+        st.write("📌 **Chú giải Khu dân cư:**")
+        st.markdown("🟢 < 50m (Rất gần)<br>🟡 50m - 150m (Trung bình)<br>🔴 > 150m (Quá xa)", unsafe_allow_html=True)
 
     with col_map:
         fig, ax = plt.subplots(figsize=(10, 7))
-        fig.patch.set_facecolor("#161b22")
-        ax.set_facecolor("#161b22")
+        fig.patch.set_facecolor("#0e1117")
+        ax.set_facecolor("#0e1117")
 
-        # Màu sắc quy chuẩn
-        c_res = "#00d1b2"    # Xanh ngọc - Cư dân
-        c_ind = "#ffdd57"    # Vàng - Công nghiệp
-        c_gar = "#ff3860"    # Đỏ - Điểm rác
-        c_road = "#484f58"   # Xám - Đường xá
+        # 1. Lớp nền ranh giới
+        bounds.plot(ax=ax, color="#161b22", edgecolor="#30363d")
 
-        # Vẽ lớp nền (Ranh giới & Đường)
-        bounds.plot(ax=ax, color="#0d1117", edgecolor="#30363d")
-        road.plot(ax=ax, color=c_road, linewidth=0.6, alpha=0.5)
+        # 2. Xếp chồng các lớp
+        if "Hệ thống đường xá" in lop_hien_thi:
+            road.plot(ax=ax, color="#6e7681", linewidth=0.5, alpha=0.5)
 
-        # Logic hiển thị theo chế độ
-        if mode == "Tất cả dữ liệu":
-            building_res.plot(ax=ax, color=c_res, alpha=0.5, label="Cư dân")
-            building_ind.plot(ax=ax, color=c_ind, alpha=0.5, label="Công nghiệp")
-            garbage.plot(ax=ax, color=c_gar, markersize=70, marker="*")
+        if "Khu công nghiệp" in lop_hien_thi:
+            building_ind.plot(ax=ax, color="#bd93f9", alpha=0.7)
 
-        elif mode == "Nhấn mạnh Khu dân cư":
-            building_res.plot(ax=ax, color=c_res, alpha=0.8)
-            garbage.plot(ax=ax, color=c_gar, markersize=50)
+        if "Khu dân cư (Theo khoảng cách)" in lop_hien_thi:
+            # Tô màu nhà dân
+            building_res.plot(ax=ax, color=building_res['dist_color'], alpha=0.8)
 
-        elif mode == "Nhấn mạnh Khu công nghiệp":
-            building_ind.plot(ax=ax, color=c_ind, alpha=0.8)
-            garbage.plot(ax=ax, color=c_gar, markersize=50)
-
-        elif mode == "Chỉ hiển thị Điểm rác":
-            garbage.plot(ax=ax, color=c_gar, markersize=120, marker="P")
-
-        # Hiển thị Buffer (Vùng phục vụ)
-        if buffer_size > 0:
-            garbage.buffer(buffer_size).plot(
-                ax=ax,
-                color=c_gar,
-                alpha=0.2
-            )
+        if "Điểm thu gom rác" in lop_hien_thi:
+            garbage.plot(ax=ax, color="#00f2fe", markersize=80, marker="*")
+            
+            if buffer_size > 0:
+                garbage.buffer(buffer_size).plot(ax=ax, color="#00f2fe", alpha=0.15)
 
         ax.set_axis_off()
+        # Loại bỏ lề thừa của biểu đồ
+        plt.tight_layout()
         st.pyplot(fig, use_container_width=True)
 
 # ===============================
 # TRANG 2: THỐNG KÊ & PHÂN TÍCH
 # ===============================
 else:
-    st.header("📊 Báo cáo Tổng hợp & Phân tích Hệ thống")
+    st.header("📊 Báo cáo Tổng hợp & Phân phối")
     
-    # --- TÍNH TOÁN DỮ LIỆU ---
-    # Tính khoảng cách từ mỗi nhà dân đến điểm rác gần nhất
-    dist_series = building_res.geometry.apply(lambda x: garbage.distance(x).min())
-    avg_dist = dist_series.mean()
-    max_dist = dist_series.max()
+    # Số liệu tổng quan
+    avg_dist = building_res['min_dist'].mean()
+    max_dist = building_res['min_dist'].max()
     
-    # --- HIỂN THỊ 4 CHỈ SỐ VÀNG ---
     c1, c2, c3, c4 = st.columns(4)
-    
-    with c1:
-        st.metric("Tổng điểm rác", f"{len(garbage)} điểm", help="Tổng số điểm thu gom rác thực tế")
-    with c2:
-        st.metric("Tổng số nhà dân", f"{len(building_res)} căn", help="Tổng số tòa nhà thuộc loại cư dân")
-    with c3:
-        st.metric("Tổng khu công nghiệp", f"{len(building_ind)} khu", help="Tổng số nhà máy, xí nghiệp")
-    with c4:
-        st.metric(
-            "Khoảng cách trung bình", 
-            f"{avg_dist:.2f} m", 
-            delta=f"Xa nhất: {max_dist:.1f}m", 
-            delta_color="inverse",
-            help="Khoảng cách trung bình người dân phải đi bộ đến điểm rác"
-        )
+    with c1: st.metric("Tổng điểm rác", f"{len(garbage)} điểm")
+    with c2: st.metric("Tổng số nhà dân", f"{len(building_res)} căn")
+    with c3: st.metric("Tổng khu công nghiệp", f"{len(building_ind)} khu")
+    with c4: st.metric("Khoảng cách TB", f"{avg_dist:.1f} m", delta=f"Xa nhất: {max_dist:.1f}m", delta_color="inverse")
 
     st.markdown("---")
     
-    # --- CHI TIẾT PHÂN TÍCH ---
-    col_analysis, col_chart = st.columns([1, 1])
+    # Phân nhóm dữ liệu khoảng cách
+    nhom_1 = len(building_res[building_res['min_dist'] <= 50])
+    nhom_2 = len(building_res[(building_res['min_dist'] > 50) & (building_res['min_dist'] <= 150)])
+    nhom_3 = len(building_res[building_res['min_dist'] > 150])
+    tong = len(building_res)
+
+    col_table, col_chart = st.columns([1.2, 1])
     
-    with col_analysis:
-        st.subheader("📏 Đánh giá khả năng tiếp cận")
+    with col_table:
+        st.subheader("📋 Bảng phân loại mức độ tiếp cận")
+        df_class = pd.DataFrame({
+            "Phân loại": ["🟢 Rất gần (< 50m)", "🟡 Trung bình (50-150m)", "🔴 Quá xa (> 150m)"],
+            "Số lượng nhà": [nhom_1, nhom_2, nhom_3],
+            "Tỷ lệ": [f"{(nhom_1/tong)*100:.1f}%", f"{(nhom_2/tong)*100:.1f}%", f"{(nhom_3/tong)*100:.1f}%"]
+        })
+        st.dataframe(df_class, hide_index=True, use_container_width=True)
         
-        # Nhận xét tự động
-        if avg_dist < 100:
-            st.success("✅ **Hệ thống phân bổ tốt:** Hầu hết cư dân đều ở rất gần các điểm thu gom rác.")
-        elif avg_dist < 200:
-            st.warning("⚠️ **Mức độ trung bình:** Một số khu vực có thể cần bổ sung thêm thùng rác.")
-        else:
-            st.error("🚨 **Cần cải thiện:** Khoảng cách tiếp cận quá xa, người dân gặp khó khăn khi đổ rác.")
-            
-        st.write(f"""
-        **Chi tiết kỹ thuật:**
-        - Mỗi điểm rác phục vụ trung bình cho **{len(building_res)/len(garbage):.1f}** hộ dân.
-        - Tòa nhà nằm ở vị trí bất lợi nhất cần đi bộ **{max_dist:.1f} mét**.
-        """)
-        
-        show_detail = st.checkbox("Hiển thị biểu đồ biến thiên chi tiết")
-            
+        with st.expander("**💡Nhận xét**"):
+            st.info("Các khu vực đánh dấu màu đỏ (>150m) là những điểm mù (blind-spots) trong hệ thống thu gom, cần ưu tiên khảo sát lắp đặt thêm thùng rác trong giai đoạn quy hoạch tiếp theo.")
+
     with col_chart:
-        st.subheader("📈 Cơ cấu Hạ tầng")
-        df_counts = pd.DataFrame({
-            "Loại công trình": ["Cư dân", "Công nghiệp"],
-            "Số lượng": [len(building_res), len(building_ind)]
-        }).set_index("Loại công trình")
-        st.bar_chart(df_counts)
+        st.subheader("📉 Biểu đồ Phân phối")
+        
+        # Vẽ biểu đồ Bar Chart
+        fig_bar, ax_bar = plt.subplots(figsize=(6, 4))
+        fig_bar.patch.set_facecolor('#0e1117')
+        ax_bar.set_facecolor('#0e1117')
+        
+        categories = ['< 50m', '50-150m', '> 150m']
+        values = [nhom_1, nhom_2, nhom_3]
+        colors = ['#00ea75', '#ffc107', '#ff3860']
+        
+        bars = ax_bar.bar(categories, values, color=colors, alpha=0.8)
+        
+        # Thêm số liệu trên đầu cột
+        for bar in bars:
+            yval = bar.get_height()
+            ax_bar.text(bar.get_x() + bar.get_width()/2, yval + (max(values)*0.02), int(yval), 
+                        ha='center', va='bottom', color='white', fontweight='bold')
+            
+        ax_bar.tick_params(colors='white')
+        ax_bar.spines['top'].set_visible(False)
+        ax_bar.spines['right'].set_visible(False)
+        ax_bar.spines['left'].set_color('#30363d')
+        ax_bar.spines['bottom'].set_color('#30363d')
+        
+        st.pyplot(fig_bar)
 
-    if show_detail:
-        st.divider()
-        st.subheader("📉 Biểu đồ khoảng cách tiếp cận của từng khu vực")
-        st.area_chart(dist_series)
-        st.info("Biểu đồ thể hiện mức độ chênh lệch khoảng cách. Các đỉnh cao đại diện cho các ngôi nhà nằm xa điểm tập kết rác nhất.")
-
-    # DANH SÁCH DỮ LIỆU GỐC
-    st.divider()
-    with st.expander("📋 Xem danh sách dữ liệu gốc (Điểm rác)"):
-        # Loại bỏ cột hình học 'geom' để bảng hiển thị sạch sẽ
-        df_display = garbage.drop(columns='geom') if 'geom' in garbage.columns else garbage
-        st.dataframe(df_display, use_container_width=True)
+    # Danh sách dữ liệu rác
+    # st.divider()
+    # with st.expander("📋 Xem danh sách tọa độ Điểm rác (Database)"):
+    #     df_display = garbage.drop(columns='geom') if 'geom' in garbage.columns else garbage
+    #     st.dataframe(df_display, use_container_width=True)

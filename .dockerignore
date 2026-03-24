@@ -1,0 +1,5 @@
+# Ignoring files
+demo.py
+.env
+env/
+__pycache__/
